@@ -1,6 +1,7 @@
 using System;
 using System.Drawing;
 using System.Windows.Forms;
+using System.Runtime.InteropServices;
 
 namespace WheelFix;
 
@@ -11,15 +12,16 @@ public sealed class TrayAppContext : ApplicationContext
     private readonly StartupService _startupService = new();
     private readonly AppConfig _config;
     private readonly MouseWheelFilter _filter;
-    private readonly Timer _statsTimer;
+    private readonly System.Windows.Forms.Timer _statsTimer;
 
     private readonly ToolStripMenuItem _enabledItem;
     private readonly ToolStripMenuItem _startupItem;
     private readonly ToolStripMenuItem _fixCountItem;
     private readonly ToolStripMenuItem _fixPerMinuteItem;
-    private readonly ToolStripMenuItem[] _windowItems;
+    private readonly ToolStripMenuItem[] _pauseItems;
 
     private bool _isExiting;
+    private int _currentState = 0; // -1: Up, 0: Idle, 1: Down
 
     public TrayAppContext()
     {
@@ -31,8 +33,8 @@ public sealed class TrayAppContext : ApplicationContext
             _config.StartWithWindows = startupEnabled;
         }
 
-        _filter = new MouseWheelFilter(_config.IsFilterEnabled, _config.WindowMilliseconds);
-        _filter.FixCountChanged += (_, count) => UpdateFixStatsMenu(count);
+        _filter = new MouseWheelFilter(_config.IsFilterEnabled, _config.PauseThresholdMilliseconds);
+        _filter.StateChanged += state => UpdateIcon(state);
         _filter.Start();
 
         _enabledItem = new ToolStripMenuItem("启用过滤")
@@ -42,7 +44,7 @@ public sealed class TrayAppContext : ApplicationContext
         };
         _enabledItem.Click += (_, _) => ToggleFilter();
 
-        _windowItems = BuildWindowMenuItems();
+        _pauseItems = BuildPauseMenuItems();
 
         _fixCountItem = new ToolStripMenuItem("修复次数: 0")
         {
@@ -62,10 +64,11 @@ public sealed class TrayAppContext : ApplicationContext
         _startupItem.Click += (_, _) => ToggleStartup();
 
         var menu = new ContextMenuStrip();
-        var windowMenu = new ToolStripMenuItem("窗口时间");
-        windowMenu.DropDownItems.AddRange(_windowItems);
+        var pauseMenu = new ToolStripMenuItem("停顿抑制");
+        pauseMenu.DropDownItems.AddRange(_pauseItems);
+
         menu.Items.Add(_enabledItem);
-        menu.Items.Add(windowMenu);
+        menu.Items.Add(pauseMenu);
         menu.Items.Add(_fixCountItem);
         menu.Items.Add(_fixPerMinuteItem);
         menu.Items.Add(new ToolStripSeparator());
@@ -75,34 +78,35 @@ public sealed class TrayAppContext : ApplicationContext
 
         _notifyIcon = new NotifyIcon
         {
-            Icon = SystemIcons.Application,
+            Icon = GetIconForState(0),
             Text = "WheelFix",
             ContextMenuStrip = menu,
             Visible = true
         };
         _notifyIcon.DoubleClick += (_, _) => ShowStatus();
 
-        _statsTimer = new Timer { Interval = 1000 };
-        _statsTimer.Tick += (_, _) => RefreshPerMinuteMenu();
+        _statsTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+        _statsTimer.Tick += (_, _) => RefreshStatsMenu();
         _statsTimer.Start();
 
         UpdateTooltip();
-        RefreshPerMinuteMenu();
+        RefreshStatsMenu();
     }
 
-    private ToolStripMenuItem[] BuildWindowMenuItems()
+    private ToolStripMenuItem[] BuildPauseMenuItems()
     {
-        var items = new ToolStripMenuItem[AppConfig.AllowedWindows.Length];
+        var items = new ToolStripMenuItem[AppConfig.AllowedPauseThresholds.Length];
 
-        for (var i = 0; i < AppConfig.AllowedWindows.Length; i++)
+        for (var i = 0; i < AppConfig.AllowedPauseThresholds.Length; i++)
         {
-            var ms = AppConfig.AllowedWindows[i];
-            var item = new ToolStripMenuItem($"{ms} ms")
+            var ms = AppConfig.AllowedPauseThresholds[i];
+            var label = ms == 0 ? "关闭" : $"{ms / 1000.0} s";
+            var item = new ToolStripMenuItem(label)
             {
                 Tag = ms,
-                Checked = _config.WindowMilliseconds == ms
+                Checked = _config.PauseThresholdMilliseconds == ms
             };
-            item.Click += (_, _) => SelectWindow(ms);
+            item.Click += (_, _) => SelectPauseThreshold(ms);
             items[i] = item;
         }
 
@@ -113,20 +117,19 @@ public sealed class TrayAppContext : ApplicationContext
     {
         _config.IsFilterEnabled = _enabledItem.Checked;
         _filter.IsEnabled = _config.IsFilterEnabled;
+        UpdateIcon(_currentState);
         UpdateTooltip();
     }
 
-    private void SelectWindow(int ms)
+    private void SelectPauseThreshold(int ms)
     {
-        _config.WindowMilliseconds = ms;
-        _filter.WindowMilliseconds = ms;
+        _config.PauseThresholdMilliseconds = ms;
+        _filter.PauseThresholdMilliseconds = ms;
 
-        foreach (var item in _windowItems)
+        foreach (var item in _pauseItems)
         {
             item.Checked = (int)item.Tag! == ms;
         }
-
-        UpdateTooltip();
     }
 
     private void ToggleStartup()
@@ -143,31 +146,82 @@ public sealed class TrayAppContext : ApplicationContext
         }
     }
 
-    private void UpdateFixStatsMenu(long count)
+    private void RefreshStatsMenu()
     {
-        if (_fixCountItem.Owner?.InvokeRequired == true)
-        {
-            _fixCountItem.Owner.Invoke(new Action(() =>
-            {
-                _fixCountItem.Text = $"修复次数: {count}";
-                _fixPerMinuteItem.Text = $"每分钟修复: {_filter.GetFixesInLastMinute()}";
-            }));
-            return;
-        }
-
-        _fixCountItem.Text = $"修复次数: {count}";
+        // Periodic check to reset icon if pause threshold has passed
+        UpdateIcon(_filter.GetCurrentState());
+        
+        _fixCountItem.Text = $"修复次数: {_filter.FixCount}";
         _fixPerMinuteItem.Text = $"每分钟修复: {_filter.GetFixesInLastMinute()}";
     }
 
-    private void RefreshPerMinuteMenu()
+    [DllImport("user32.dll", ExactSpelling = true, SetLastError = true)]
+    internal static extern bool DestroyIcon(IntPtr hIcon);
+
+    private void UpdateIcon(int state)
     {
-        _fixPerMinuteItem.Text = $"每分钟修复: {_filter.GetFixesInLastMinute()}";
+        if (_currentState == state && _notifyIcon.Icon != null) return;
+        
+        var oldIcon = _notifyIcon.Icon;
+        _notifyIcon.Icon = GetIconForState(state);
+        
+        if (oldIcon != null && oldIcon != SystemIcons.Application)
+        {
+            DestroyIcon(oldIcon.Handle);
+            oldIcon.Dispose();
+        }
+    }
+
+    private Icon GetIconForState(int state)
+    {
+        if (!_config.IsFilterEnabled) state = 0;
+        _currentState = state;
+
+        using var bitmap = new Bitmap(32, 32);
+        using var g = Graphics.FromImage(bitmap);
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+
+        // Background
+        var bgColor = state == 0 ? Color.FromArgb(64, 64, 64) : (state == 1 ? Color.ForestGreen : Color.DodgerBlue);
+        using var brush = new SolidBrush(bgColor);
+        g.FillEllipse(brush, 2, 2, 28, 28);
+
+        // Foreground
+        using var pen = new Pen(Color.White, 3);
+        if (state == 0)
+        {
+            // Draw Minimalist Mouse
+            g.DrawEllipse(pen, 8, 4, 16, 24); // Mouse body
+            g.DrawLine(pen, 16, 4, 16, 12);   // Button split
+
+            // Broken wheel (red X)
+            using var redPen = new Pen(Color.Tomato, 2);
+            g.DrawLine(redPen, 14, 10, 18, 14);
+            g.DrawLine(redPen, 18, 10, 14, 14);
+        }
+        else if (state == 1)
+        {
+            // Up Arrow
+            g.DrawLine(pen, 16, 8, 16, 24);
+            g.DrawLine(pen, 16, 8, 8, 16);
+            g.DrawLine(pen, 16, 8, 24, 16);
+        }
+        else if (state == -1)
+        {
+            // Down Arrow
+            g.DrawLine(pen, 16, 8, 16, 24);
+            g.DrawLine(pen, 16, 24, 8, 16);
+            g.DrawLine(pen, 16, 24, 24, 16);
+        }
+
+        return Icon.FromHandle(bitmap.GetHicon());
     }
 
     private void ShowStatus()
     {
+        var pauseText = _config.PauseThresholdMilliseconds == 0 ? "已关闭" : $"{_config.PauseThresholdMilliseconds / 1000.0} s";
         var status = $"过滤状态: {(_config.IsFilterEnabled ? "启用" : "禁用")}{Environment.NewLine}" +
-                     $"窗口时间: {_config.WindowMilliseconds} ms{Environment.NewLine}" +
+                     $"停顿抑制: {pauseText}{Environment.NewLine}" +
                      $"本次运行修复次数: {_filter.FixCount}{Environment.NewLine}" +
                      $"每分钟修复次数: {_filter.GetFixesInLastMinute()}{Environment.NewLine}" +
                      $"开机启动: {(_config.StartWithWindows ? "开启" : "关闭")}";
