@@ -4,6 +4,28 @@ A lightweight Windows tray utility that repairs mouse wheel direction jitter cau
 
 ---
 
+## Project Structure (Engineering Layout)
+
+```text
+WheelFix/
+  src/
+    WheelFix/
+      WheelFix.csproj
+      Program.cs
+      TrayAppContext.cs
+      MouseWheelFilter.cs
+      NativeMethods.cs
+      AppConfig.cs
+      ConfigService.cs
+      StartupService.cs
+  build_output/          # Reserved directory for compiled EXE/packages uploaded from local build
+  README.md
+```
+
+> Please compile on your local Windows machine, then place generated EXE/publish artifacts into `build_output/`.
+
+---
+
 ## English
 
 ### What is WheelFix?
@@ -37,6 +59,7 @@ Requirements:
 
 Commands:
 ```bash
+cd src/WheelFix
 dotnet restore
 dotnet build
 dotnet run
@@ -45,12 +68,14 @@ dotnet run
 ### Publish
 Framework-dependent:
 ```bash
-dotnet publish -c Release -r win-x64 --self-contained false
+cd src/WheelFix
+dotnet publish -c Release -r win-x64 --self-contained false -o ../../build_output/framework-dependent
 ```
 
 Self-contained single-file:
 ```bash
-dotnet publish -c Release -r win-x64 --self-contained true /p:PublishSingleFile=true
+cd src/WheelFix
+dotnet publish -c Release -r win-x64 --self-contained true /p:PublishSingleFile=true -o ../../build_output/self-contained-single-file
 ```
 
 ### Usage
@@ -99,6 +124,7 @@ WheelFix 的处理方式：
 
 命令：
 ```bash
+cd src/WheelFix
 dotnet restore
 dotnet build
 dotnet run
@@ -107,12 +133,14 @@ dotnet run
 ### 发布
 依赖运行时版本：
 ```bash
-dotnet publish -c Release -r win-x64 --self-contained false
+cd src/WheelFix
+dotnet publish -c Release -r win-x64 --self-contained false -o ../../build_output/framework-dependent
 ```
 
 自包含单文件版本：
 ```bash
-dotnet publish -c Release -r win-x64 --self-contained true /p:PublishSingleFile=true
+cd src/WheelFix
+dotnet publish -c Release -r win-x64 --self-contained true /p:PublishSingleFile=true -o ../../build_output/self-contained-single-file
 ```
 
 ### 使用说明
@@ -161,6 +189,7 @@ WheelFix の動作：
 
 コマンド：
 ```bash
+cd src/WheelFix
 dotnet restore
 dotnet build
 dotnet run
@@ -169,12 +198,14 @@ dotnet run
 ### 配布（Publish）
 フレームワーク依存版：
 ```bash
-dotnet publish -c Release -r win-x64 --self-contained false
+cd src/WheelFix
+dotnet publish -c Release -r win-x64 --self-contained false -o ../../build_output/framework-dependent
 ```
 
 自己完結・単一ファイル版：
 ```bash
-dotnet publish -c Release -r win-x64 --self-contained true /p:PublishSingleFile=true
+cd src/WheelFix
+dotnet publish -c Release -r win-x64 --self-contained true /p:PublishSingleFile=true -o ../../build_output/self-contained-single-file
 ```
 
 ### 使い方
